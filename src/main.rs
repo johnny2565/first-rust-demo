@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Ok};
-use axum::{Json, Router, extract::State, http::StatusCode, routing::{get, post}, serve};
+use axum::{Json, Router, extract::{Path, State}, http::StatusCode, routing::{delete, get, post, put}, serve};
 use dotenvy::{dotenv, var};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
@@ -46,6 +46,9 @@ async fn main()->anyhow::Result<()>{
     .route("/", get(async || "Hi john"))
     // .route("/task", post(create_task))
     .route("/task", post(create_task_with_body))
+    .route("/task", get(read_task))
+    .route("/task", put(update_task))
+    .route("/task/{id}", delete(delete_task))
     .with_state(pool);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.
@@ -124,7 +127,7 @@ Json<TaskRequestBody>) -> (StatusCode, Json<TaskResponseBody>) {
 
 async fn read_task(State(pool):State<PgPool>)->Json<TaskReadResponse>
 {
-    let tasks = sqlx::query("SELECT * FROM task WHERE id = $1")
+    let tasks = sqlx::query("SELECT * FROM task")
     .fetch_all(&pool)
     .await
     .context("failed to read task").unwrap();
@@ -136,6 +139,55 @@ async fn read_task(State(pool):State<PgPool>)->Json<TaskReadResponse>
     Json(TaskReadResponse { title: "Fetched task successfully".to_string(), task: tasks_rows })
 }
 
+
+async fn update_task(State(pool):State<PgPool>, Json(data):Json<TaskUpdateRequestBody>) -> 
+Json<TaskResponseBody>
+{
+    let task = sqlx::query("UPDATE task SET title = $1 WHERE id = $2 RETURNING id")
+    .bind(&data.title)
+    .bind(&data.id)
+    .fetch_one(&pool)
+    .await
+    .context("failed to update task").unwrap();
+
+    Json(
+        TaskResponseBody 
+        { message: "Task updated successfully".to_string(), 
+        id: task.get::<i32,_>("id") 
+    })
+}
+
+
+async fn delete_task(State(pool): State<PgPool>, Path(id):Path<i32>) -> StatusCode
+{
+    let task = sqlx::query("SELECT id FROM task WHERE id = $1")
+    .bind(&id)
+    .fetch_one(&pool)
+    .await
+    .context("Bad request")
+    .unwrap();
+
+    if task.is_empty() {
+
+        StatusCode::BAD_REQUEST
+    }
+    else
+    {
+        sqlx::query("DELETE FROM task WHERE id = $1 ")
+        .bind(&id)
+        .execute(&pool)
+        .await
+        .context("Unable to delete entry")
+        .unwrap();
+
+        StatusCode::NO_CONTENT
+    }
+
+    // match task {
+        
+    // }
+    
+}
 
 
 // struct in this context serves as model or dto that is to be passed through requesting client
@@ -153,6 +205,15 @@ struct TaskResponseBody {
     message:String,
     id:i32
 }
+
+
+
+#[derive(Deserialize,Serialize)]
+struct TaskUpdateRequestBody {
+    title:String,
+    id:i32
+}
+
 
 
 #[derive(Deserialize, Serialize)]
